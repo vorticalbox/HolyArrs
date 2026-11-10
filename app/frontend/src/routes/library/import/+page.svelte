@@ -243,9 +243,9 @@
 			<h2 id="h-done" class="h2">{t('library.import.done')}</h2>
 			<p class="small">{t(okCount === 1 ? 'library.import.nowOne' : 'library.import.nowMany', { n: okCount, word: w, words: ws })}</p>
 			<ul class="list">
-				{#each results as r (r.folder)}
+				{#each results as r (r.file || r.folder)}
 					<li>
-						<span class="mono small path">{r.folder}</span>
+						<span class="mono small path">{r.file ? fileName(r.file) : r.folder}</span>
 						{#if r.title_id}
 							<a class="small" href={to(`/library/${r.title_id}`)}>{t('library.import.openThe', { word: w })}</a>
 							{#if r.episodes !== undefined || r.unknown?.length}
@@ -303,7 +303,7 @@
 										<div class="field other">
 											<label class="xs" for="o-{rowId(f)}">{t('library.import.orOne')}</label>
 											<select id="o-{rowId(f)}" class="input" bind:value={sel[adoptKey(f)]}>
-												{#each [f.match, ...f.others].filter((x) => !!x) as m (matchKey(m))}
+												{#each [f.match, ...f.others].filter((x) => !!x) as m, i (`${matchKey(m)}:${i}`)}
 													<option value={matchKey(m)}>{m.name}{m.year ? ` (${m.year})` : ''} · {score(m.score)}</option>
 												{/each}
 											</select>
