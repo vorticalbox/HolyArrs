@@ -51,6 +51,7 @@ export interface AdoptCandidate {
 	parsed_name: string;
 	parsed_year?: number;
 	videos: { path: string; size: number }[];
+	file?: string;
 	main?: string;
 	match?: AdoptMatch;
 	others: AdoptMatch[];
@@ -354,20 +355,31 @@ export function matchKey(m: AdoptMatch): string {
 	return m.id || m.tmdb_id;
 }
 
+export function adoptKey(f: { folder: string; file?: string }): string {
+	return f.file || f.folder;
+}
+
 // Only sure matches start picked.
 export function startPicks(folders: AdoptCandidate[]): Record<string, string> {
 	const out: Record<string, string> = {};
-	for (const f of folders) if (f.status === 'matched' && f.match) out[f.folder] = matchKey(f.match);
+	for (const f of folders) if (f.status === 'matched' && f.match) out[adoptKey(f)] = matchKey(f.match);
 	return out;
 }
 
 export function choices(
 	picks: Record<string, string>,
-	kind: 'movie' | 'show' | 'music' = 'movie'
-): ({ folder: string; tmdb_id: string } | { folder: string; id: string })[] {
+	kind: 'movie' | 'show' | 'music' = 'movie',
+	folders: AdoptCandidate[] = []
+): ({ folder: string; file?: string; tmdb_id: string } | { folder: string; id: string })[] {
+	const byKey = new Map(folders.map((f) => [adoptKey(f), f]));
 	return Object.entries(picks)
 		.filter(([, id]) => !!id)
-		.map(([folder, id]) => (kind === 'movie' ? { folder, tmdb_id: id } : { folder, id }));
+		.map(([key, id]) => {
+			const f = byKey.get(key);
+			const folder = f?.folder ?? key;
+			if (kind !== 'movie') return { folder, id };
+			return f?.file ? { folder, file: f.file, tmdb_id: id } : { folder, tmdb_id: id };
+		});
 }
 
 // Prefers the show source id, then the usual id types.

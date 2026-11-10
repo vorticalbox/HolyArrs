@@ -26,7 +26,7 @@ HolyArrs takes over a folder of movies as it is. It moves and renames nothing.
 
 You should see the movies in **Library** with their files present.
 
-A folder name with a TMDB number, such as `Heat (1995) {tmdb-949}`, always matches that movie. The biggest video in each folder becomes the movie's file. Samples are left out.
+A folder name with a TMDB number, such as `Heat (1995) {tmdb-949}`, always matches that movie. When a folder has two or more videos of at least 600 MB, each of those files is its own movie, named from the file. Otherwise the biggest video is the movie, named from the folder. Samples are left out.
 
 This tree adopts cleanly:
 

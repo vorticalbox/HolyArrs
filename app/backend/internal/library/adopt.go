@@ -39,6 +39,13 @@ const (
 	MatchUnsure = 0.5
 )
 
+// movieMinSize is the smallest video that counts as its own movie when a
+// folder holds more than one file that big. One file, or only smaller
+// files, stays the old rule: the biggest file, named from the folder.
+var movieMinSize int64 = 600 << 20
+
+var reFileIndex = regexp.MustCompile(`^\d{1,2}[.)]?\s+`)
+
 // AdoptMatch is one movie or show a folder may be.
 type AdoptMatch struct {
 	// ID is a show's "<source>:<id>" (tvdb:81189); movies use TMDB.
@@ -57,13 +64,16 @@ type AdoptVideo struct {
 
 // AdoptCandidate is one folder in a Library folder and what it may be.
 type AdoptCandidate struct {
-	Folder     string       `json:"folder"`
-	ParsedName string       `json:"parsed_name"`
-	ParsedYear int          `json:"parsed_year,omitempty"`
-	Videos     []AdoptVideo `json:"videos"`
-	Main       string       `json:"main,omitempty"` // the biggest video, which becomes the File
-	Match      *AdoptMatch  `json:"match,omitempty"`
-	Others     []AdoptMatch `json:"others"`
+	Folder     string `json:"folder"`
+	ParsedName string `json:"parsed_name"`
+	ParsedYear int    `json:"parsed_year,omitempty"`
+	// File is set when this row is one video in a folder of several large
+	// files. Empty means the folder itself is the movie.
+	File   string       `json:"file,omitempty"`
+	Videos []AdoptVideo `json:"videos"`
+	Main   string       `json:"main,omitempty"` // the video that becomes the File
+	Match  *AdoptMatch  `json:"match,omitempty"`
+	Others []AdoptMatch `json:"others"`
 	// Status: matched, unsure, unmatched, no_video, in_library, never_add.
 	Status  string `json:"status"`
 	Why     string `json:"why"`
@@ -122,6 +132,24 @@ func NasSystemDir(name string) bool {
 }
 
 func listVideos(lib, folder string) []AdoptVideo { return ListVideosN(lib, folder, maxScanVideos) }
+
+// filesAtLeast keeps videos at least min bytes, biggest first (listVideos
+// already sorts that way).
+func filesAtLeast(videos []AdoptVideo, min int64) []AdoptVideo {
+	var out []AdoptVideo
+	for _, v := range videos {
+		if v.Size >= min {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// fileTitle is the movie name read from a file, without a leading "1. ".
+func fileTitle(rel string) string {
+	base := strings.TrimSuffix(path.Base(rel), path.Ext(rel))
+	return strings.TrimSpace(reFileIndex.ReplaceAllString(strings.TrimSpace(base), ""))
+}
 
 // listVideosN is listVideos reading at most limit videos.
 func ListVideosN(lib, folder string, limit int) []AdoptVideo {
@@ -289,16 +317,47 @@ func PlanAdoptFrom(ctx context.Context, db Reader, md metadata.Provider, folderI
 	for _, v := range vs {
 		known[strings.ToLower(v.FolderName)] = v.TitleID
 	}
+	knownFiles, err := libraryMovieFiles(ctx, db, lf.ID)
+	if err != nil {
+		return p, err
+	}
 	p.Warning = MountWarning(ctx, db, lf, len(ents))
 	for _, e := range ents {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || NasSystemDir(e.Name()) || (after != "" && e.Name() <= after) {
+			continue
+		}
+		videos := listVideos(lf.Path, e.Name())
+		big := filesAtLeast(videos, movieMinSize)
+		if len(big) >= 2 {
+			// Several large files in one folder: each file is a movie.
+			// Stop before the folder when the page cannot hold all of them,
+			// so the next page does not skip the rest.
+			if len(p.Folders) > 0 && len(p.Folders)+len(big) > p.Limit {
+				p.More, p.Next = true, p.Folders[len(p.Folders)-1].Folder
+				break
+			}
+			for _, vid := range big {
+				c := AdoptCandidate{Folder: e.Name(), File: vid.Path, Videos: []AdoptVideo{vid}, Main: vid.Path, Others: []AdoptMatch{}}
+				if id, ok := knownFiles[strings.ToLower(vid.Path)]; ok {
+					c.Status, c.Why, c.TitleID = "in_library", "this file is already a movie in the Library", id
+					p.Folders = append(p.Folders, c)
+					p.Counts[c.Status]++
+					continue
+				}
+				name, year, ms, err := matchFolder(ctx, md, fileTitle(vid.Path))
+				if err := classifyMovie(ctx, db, &c, name, year, ms, err, "file"); err != nil {
+					return p, err
+				}
+				p.Folders = append(p.Folders, c)
+				p.Counts[c.Status]++
+			}
 			continue
 		}
 		if len(p.Folders) >= p.Limit {
 			p.More, p.Next = true, p.Folders[len(p.Folders)-1].Folder
 			break
 		}
-		c := AdoptCandidate{Folder: e.Name(), Videos: listVideos(lf.Path, e.Name()), Others: []AdoptMatch{}}
+		c := AdoptCandidate{Folder: e.Name(), Videos: videos, Others: []AdoptMatch{}}
 		if len(c.Videos) > 0 {
 			c.Main = c.Videos[0].Path
 		}
@@ -309,50 +368,8 @@ func PlanAdoptFrom(ctx context.Context, db Reader, md metadata.Provider, folderI
 			continue
 		}
 		name, year, ms, err := matchFolder(ctx, md, e.Name())
-		if err != nil {
-			if ctx.Err() != nil {
-				return p, ctx.Err()
-			}
-			// One failed lookup does not stop the scan: this folder is
-			// unmatched with the reason and can be looked up by hand.
-			c.ParsedName, c.ParsedYear = name, year
-			c.Status, c.Why = "unmatched", "the TMDB lookup failed ("+err.Error()+"); look it up by hand or scan again later"
-			p.Folders = append(p.Folders, c)
-			p.Counts[c.Status]++
-			continue
-		}
-		c.ParsedName, c.ParsedYear = name, year
-		if len(ms) > 0 && ms[0].Score >= MatchUnsure {
-			c.Match = &ms[0]
-			c.Others = append(c.Others, ms[1:]...)
-		} else {
-			c.Others = append(c.Others, ms...)
-		}
-		switch {
-		case c.Match == nil:
-			c.Status, c.Why = "unmatched", "no movie at TMDB fits this folder name; pick one by hand"
-		default:
-			id, err := TitleByTMDB(ctx, db, c.Match.TMDB)
-			if err != nil {
-				return p, err
-			}
-			never, err := OnNeverAdd(ctx, db, c.Match.TMDB)
-			if err != nil {
-				return p, err
-			}
-			close := len(ms) > 1 && ms[1].Score > c.Match.Score-0.1
-			switch {
-			case id != 0:
-				c.Status, c.Why, c.TitleID = "in_library", "this movie is already in the Library in another folder", id
-			case never:
-				c.Status, c.Why = "never_add", "this movie is on the Never-add list"
-			case len(c.Videos) == 0:
-				c.Status, c.Why = "no_video", "no video file in the folder; adopting adds the movie as missing"
-			case c.Match.Score < MatchSure || close:
-				c.Status, c.Why = "unsure", fmt.Sprintf("best match %s (%d) at %.0f%%; check it", c.Match.Name, c.Match.Year, c.Match.Score*100)
-			default:
-				c.Status, c.Why = "matched", fmt.Sprintf("%s (%d) at %.0f%%", c.Match.Name, c.Match.Year, c.Match.Score*100)
-			}
+		if err := classifyMovie(ctx, db, &c, name, year, ms, err, "folder"); err != nil {
+			return p, err
 		}
 		p.Folders = append(p.Folders, c)
 		p.Counts[c.Status]++
@@ -360,10 +377,91 @@ func PlanAdoptFrom(ctx context.Context, db Reader, md metadata.Provider, folderI
 	return p, nil
 }
 
+// libraryMovieFiles maps a file path already in this Library folder to its title.
+func libraryMovieFiles(ctx context.Context, db Reader, folderID int64) (map[string]int64, error) {
+	rows, err := db.QueryContext(ctx, `SELECT f.relative_path, v.title_id FROM files f
+		JOIN versions v ON v.id = f.version_id
+		JOIN titles t ON t.id = v.title_id
+		WHERE v.library_folder_id = ? AND t.state != 'removed' AND f.state NOT IN ('gone', 'replaced')`, folderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var rel string
+		var id int64
+		if err := rows.Scan(&rel, &id); err != nil {
+			return nil, err
+		}
+		out[strings.ToLower(rel)] = id
+	}
+	return out, rows.Err()
+}
+
+func movieFileTaken(ctx context.Context, db Reader, folderID int64, rel string) (bool, error) {
+	var n int
+	err := db.QueryRowContext(ctx, `SELECT count(*) FROM files f
+		JOIN versions v ON v.id = f.version_id
+		JOIN titles t ON t.id = v.title_id
+		WHERE v.library_folder_id = ? AND lower(f.relative_path) = lower(?)
+		  AND t.state != 'removed' AND f.state NOT IN ('gone', 'replaced')`, folderID, rel).Scan(&n)
+	return n > 0, err
+}
+
+// classifyMovie fills status from a TMDB lookup. noun is "folder" or "file".
+func classifyMovie(ctx context.Context, db Reader, c *AdoptCandidate, name string, year int, ms []AdoptMatch, lookupErr error, noun string) error {
+	if lookupErr != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		// One failed lookup does not stop the scan.
+		c.ParsedName, c.ParsedYear = name, year
+		c.Status, c.Why = "unmatched", "the TMDB lookup failed ("+lookupErr.Error()+"); look it up by hand or scan again later"
+		return nil
+	}
+	c.ParsedName, c.ParsedYear = name, year
+	if len(ms) > 0 && ms[0].Score >= MatchUnsure {
+		c.Match = &ms[0]
+		c.Others = append(c.Others, ms[1:]...)
+	} else {
+		c.Others = append(c.Others, ms...)
+	}
+	switch {
+	case c.Match == nil:
+		c.Status, c.Why = "unmatched", "no movie at TMDB fits this "+noun+" name; pick one by hand"
+	default:
+		id, err := TitleByTMDB(ctx, db, c.Match.TMDB)
+		if err != nil {
+			return err
+		}
+		never, err := OnNeverAdd(ctx, db, c.Match.TMDB)
+		if err != nil {
+			return err
+		}
+		close := len(ms) > 1 && ms[1].Score > c.Match.Score-0.1
+		switch {
+		case id != 0:
+			c.Status, c.Why, c.TitleID = "in_library", "this movie is already in the Library in another folder", id
+		case never:
+			c.Status, c.Why = "never_add", "this movie is on the Never-add list"
+		case len(c.Videos) == 0:
+			c.Status, c.Why = "no_video", "no video file in the folder; adopting adds the movie as missing"
+		case c.Match.Score < MatchSure || close:
+			c.Status, c.Why = "unsure", fmt.Sprintf("best match %s (%d) at %.0f%%; check it", c.Match.Name, c.Match.Year, c.Match.Score*100)
+		default:
+			c.Status, c.Why = "matched", fmt.Sprintf("%s (%d) at %.0f%%", c.Match.Name, c.Match.Year, c.Match.Score*100)
+		}
+	}
+	return nil
+}
+
 // AdoptChoice is one folder to adopt as one movie.
 type AdoptChoice struct {
 	Folder string `json:"folder"`
-	TMDB   string `json:"tmdb_id,omitempty"`
+	// File is one large video in Folder. Empty adopts the biggest file.
+	File string `json:"file,omitempty"`
+	TMDB string `json:"tmdb_id,omitempty"`
 	// ID is the show to adopt a show folder as: "<source>:<id>".
 	ID string `json:"id,omitempty"`
 	// ReleaseGate and GateDelayDays set a movie's Release gate ("" and
@@ -427,10 +525,40 @@ func (s *Service) adoptOne(ctx context.Context, lf mediafiles.LibraryFolder, c A
 	if fi, err := os.Lstat(filepath.Join(lf.Path, c.Folder)); err != nil || !fi.IsDir() {
 		return 0, "", errors.New("no such folder in the Library folder")
 	}
-	if taken, err := FolderTaken(ctx, s.Store.Read(), lf, c.Folder); err != nil {
-		return 0, "", err
-	} else if taken {
-		return 0, "", errors.New("this folder already belongs to a movie in the Library")
+	vids := listVideos(lf.Path, c.Folder)
+	a := &Adoption{FolderName: c.Folder}
+	if c.File != "" {
+		want := filepath.ToSlash(c.File)
+		if !filepath.IsLocal(want) || path.Dir(want) != c.Folder {
+			return 0, "", errors.New("the file must be a video in that folder")
+		}
+		var found *AdoptVideo
+		for i := range vids {
+			if vids[i].Path == want && vids[i].Size >= movieMinSize {
+				found = &vids[i]
+				break
+			}
+		}
+		if found == nil {
+			return 0, "", errors.New("that file is not a movie in this folder")
+		}
+		taken, err := movieFileTaken(ctx, s.Store.Read(), lf.ID, found.Path)
+		if err != nil {
+			return 0, "", err
+		}
+		if taken {
+			return 0, "", errors.New("this file is already a movie in the Library")
+		}
+		a.File, a.Size = found.Path, found.Size
+	} else {
+		if taken, err := FolderTaken(ctx, s.Store.Read(), lf, c.Folder); err != nil {
+			return 0, "", err
+		} else if taken {
+			return 0, "", errors.New("this folder already belongs to a movie in the Library")
+		}
+		if len(vids) > 0 {
+			a.File, a.Size = vids[0].Path, vids[0].Size
+		}
 	}
 	if s.Metadata == nil {
 		return 0, "", errors.New("no metadata source")
@@ -438,10 +566,6 @@ func (s *Service) adoptOne(ctx context.Context, lf mediafiles.LibraryFolder, c A
 	m, err := s.Metadata.Movie(ctx, "tmdb:"+c.TMDB)
 	if err != nil {
 		return 0, "", fmt.Errorf("TMDB %s: %w", c.TMDB, err)
-	}
-	a := &Adoption{FolderName: c.Folder}
-	if vids := listVideos(lf.Path, c.Folder); len(vids) > 0 {
-		a.File, a.Size = vids[0].Path, vids[0].Size
 	}
 	id, err := AddMovie(ctx, s.Store, m, AddOptions{LibraryFolderID: lf.ID, WhyAdded: "import", Adopt: a,
 		ReleaseGate: c.ReleaseGate, GateDelayDays: c.GateDelayDays}, s.DownloadFolders(ctx), s.now(), by)
@@ -479,7 +603,7 @@ func (s *Service) AdoptLater(ctx context.Context, folderID int64, choices []Adop
 	}
 	raw := make([]any, 0, len(choices))
 	for _, c := range choices {
-		raw = append(raw, map[string]any{"folder": c.Folder, "tmdb_id": c.TMDB, "id": c.ID})
+		raw = append(raw, map[string]any{"folder": c.Folder, "file": c.File, "tmdb_id": c.TMDB, "id": c.ID})
 	}
 	id, _, err := s.Queue.Enqueue(ctx, KindAdopt, &domain.Subject{Type: "library_folder", ID: folderID}, map[string]any{"choices": raw, "follow": follow}, "", by)
 	return id, err

@@ -351,3 +351,52 @@ func TestPlanAdoptIsCappedAndGoesOn(t *testing.T) {
 		t.Fatalf("rest %+v %v", p, err)
 	}
 }
+
+// A folder with several files over the size line is several movies, one per file.
+func TestPlanAdoptListsEachLargeFile(t *testing.T) {
+	old := movieMinSize
+	movieMinSize = 10
+	t.Cleanup(func() { movieMinSize = old })
+	s := open(t)
+	lf := addFolder(t, s)
+	dir := filepath.Join(lf.Path, "Rings")
+	writeFile(t, filepath.Join(dir, "1. The Fellowship.mkv"), strings.Repeat("a", 20))
+	writeFile(t, filepath.Join(dir, "2. The Two Towers.mkv"), strings.Repeat("b", 20))
+	writeFile(t, filepath.Join(dir, "extra.mkv"), "x")
+	md := &metadata.Static{Movies: []metadata.Movie{
+		{Name: "The Fellowship", Year: 2001, IDs: map[string]string{"tmdb": "11"}},
+		{Name: "The Two Towers", Year: 2002, IDs: map[string]string{"tmdb": "12"}},
+	}}
+	ctx := context.Background()
+	plan, err := PlanAdopt(ctx, s.Read(), md, lf.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Folders) != 2 {
+		t.Fatalf("rows %+v", plan.Folders)
+	}
+	got := map[string]AdoptCandidate{}
+	for _, c := range plan.Folders {
+		got[c.File] = c
+	}
+	fellow := "Rings/1. The Fellowship.mkv"
+	towers := "Rings/2. The Two Towers.mkv"
+	if got[fellow].Match == nil || got[fellow].Match.TMDB != "11" || got[towers].Match == nil || got[towers].Match.TMDB != "12" {
+		t.Fatalf("matches %+v", plan.Folders)
+	}
+	svc := &Service{Store: s, Metadata: md, Now: func() time.Time { return now }}
+	res, err := svc.Adopt(ctx, lf.ID, []AdoptChoice{
+		{Folder: "Rings", File: fellow, TMDB: "11"},
+		{Folder: "Rings", File: towers, TMDB: "12"},
+	}, domain.System)
+	if err != nil || res[0].Error != "" || res[1].Error != "" || res[0].File != fellow || res[1].File != towers {
+		t.Fatalf("adopt %+v %v", res, err)
+	}
+	if r, err := svc.Rescan(ctx, domain.System); err != nil || r.Found != 0 {
+		t.Fatalf("rescan found %d %v", r.Found, err)
+	}
+	files, _ := database.Select[mediafiles.File](ctx, s.Read(), "files", "state = 'present' ORDER BY relative_path")
+	if len(files) != 2 || files[0].RelativePath != fellow || files[1].RelativePath != towers {
+		t.Fatalf("files %+v", files)
+	}
+}

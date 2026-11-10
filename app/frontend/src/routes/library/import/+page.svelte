@@ -8,7 +8,7 @@
 	import Badge from '#lib/ui/Badge.svelte';
 	import LoadError from '#lib/ui/LoadError.svelte';
 	import { reaskWhileFilling } from '#lib/music/index.ts';
-	import { LibraryToolPage, albumFolderLine, cutFilesLine, canAdopt, choices, episodeFileLine, musicFolderLine, trackFileLine, fileName, followJob, groupPlan, matchKey, score, showFolderLine, showIdOf, startPicks, type AdoptCandidate, type AdoptPlan, type AdoptResult, type JobView } from '#lib/mediafiles/index.ts';
+	import { LibraryToolPage, albumFolderLine, cutFilesLine, adoptKey, canAdopt, choices, episodeFileLine, musicFolderLine, trackFileLine, fileName, followJob, groupPlan, matchKey, score, showFolderLine, showIdOf, startPicks, type AdoptCandidate, type AdoptPlan, type AdoptResult, type JobView } from '#lib/mediafiles/index.ts';
 	import type { LookupArtist } from '#lib/music/index.ts';
 	import { onMount } from 'svelte';
 	import { to } from '#lib/core/paths.ts';
@@ -54,7 +54,7 @@
 	const w = $derived(t(`library.import.word.${word}`));
 	const ws = $derived(t(`library.import.words.${word}`));
 	const groups = $derived(plan ? groupPlan(plan.folders, word) : []);
-	const picks = $derived(choices(Object.fromEntries(Object.entries(ticked).filter(([, on]) => on).map(([f]) => [f, sel[f] ?? ''])), kind));
+	const picks = $derived(choices(Object.fromEntries(Object.entries(ticked).filter(([, on]) => on).map(([f]) => [f, sel[f] ?? ''])), kind, plan?.folders ?? []));
 	const running = $derived(!!job && !['done', 'failed', 'cancelled'].includes(job.State));
 	const okCount = $derived(results ? results.filter((r) => r.title_id).length : 0);
 
@@ -109,7 +109,7 @@
 			plan = p;
 			const start = startPicks(p.folders);
 			const s: Record<string, string> = {};
-			for (const f of p.folders) if (f.match) s[f.folder] = matchKey(f.match);
+			for (const f of p.folders) if (f.match) s[adoptKey(f)] = matchKey(f.match);
 			sel = s;
 			named = {};
 			ticked = Object.fromEntries(Object.keys(start).map((f) => [f, true]));
@@ -121,8 +121,12 @@
 		}
 	}
 
+	function rowId(f: AdoptCandidate): string {
+		return adoptKey(f).replace(/[^A-Za-z0-9_-]+/g, '-');
+	}
+
 	function openLookup(f: AdoptCandidate) {
-		lookFor = f.folder;
+		lookFor = adoptKey(f);
 		term = f.parsed_name + (f.parsed_year ? ` ${f.parsed_year}` : '');
 		found = [];
 		lookError = '';
@@ -168,7 +172,7 @@
 	}
 
 	function movieLabel(f: AdoptCandidate): string {
-		const id = sel[f.folder];
+		const id = sel[adoptKey(f)];
 		if (!id) return t('library.import.nonePicked', { word: w });
 		if (named[id]) return named[id];
 		const m = [f.match, ...f.others].find((x) => x && matchKey(x) === id);
@@ -280,16 +284,16 @@
 					<h3 class="h3">{g.label} <span class="muted">({g.folders.length})</span></h3>
 					<p class="xs muted">{g.about}</p>
 					<ul class="list">
-						{#each g.folders as f (f.folder)}
+						{#each g.folders as f (adoptKey(f))}
 							<li class="folder">
 								<div class="top">
 									{#if canAdopt(f)}
 										<label class="tick">
-											<input type="checkbox" bind:checked={ticked[f.folder]} disabled={!sel[f.folder]} aria-label={t('library.import.adoptFolder', { folder: f.folder })} />
-											<span class="mono small path">{f.folder}</span>
+											<input type="checkbox" bind:checked={ticked[adoptKey(f)]} disabled={!sel[adoptKey(f)]} aria-label={t('library.import.adoptFolder', { folder: f.file ? fileName(f.file) : f.folder })} />
+											<span class="mono small path">{f.file ? fileName(f.file) : f.folder}</span>
 										</label>
 									{:else}
-										<span class="mono small path">{f.folder}</span>
+										<span class="mono small path">{f.file ? fileName(f.file) : f.folder}</span>
 									{/if}
 									{#if f.match && canAdopt(f)}<Badge label={score(f.match.score)} />{/if}
 								</div>
@@ -297,8 +301,8 @@
 									<p class="small"><b>{movieLabel(f)}</b></p>
 									{#if f.others.length && f.status !== 'matched'}
 										<div class="field other">
-											<label class="xs" for="o-{f.folder}">{t('library.import.orOne')}</label>
-											<select id="o-{f.folder}" class="input" bind:value={sel[f.folder]}>
+											<label class="xs" for="o-{rowId(f)}">{t('library.import.orOne')}</label>
+											<select id="o-{rowId(f)}" class="input" bind:value={sel[adoptKey(f)]}>
 												{#each [f.match, ...f.others].filter((x) => !!x) as m (matchKey(m))}
 													<option value={matchKey(m)}>{m.name}{m.year ? ` (${m.year})` : ''} · {score(m.score)}</option>
 												{/each}
@@ -350,11 +354,11 @@
 								{/if}
 								{#if f.status === 'in_library' && f.title_id}<a class="xs" href={to(`/library/${f.title_id}`)}>{t('library.import.openThe', { word: w })}</a>{/if}
 								{#if canAdopt(f)}
-									{#if lookFor === f.folder}
+									{#if lookFor === adoptKey(f)}
 										<form class="look" onsubmit={lookup}>
-											<label class="sr-only" for="look-{f.folder}">{t('library.import.lookUpFor', { word: w, folder: f.folder })}</label>
+											<label class="sr-only" for="look-{rowId(f)}">{t('library.import.lookUpFor', { word: w, folder: f.file ? fileName(f.file) : f.folder })}</label>
 											<input
-												id="look-{f.folder}"
+												id="look-{rowId(f)}"
 												class="input"
 												bind:value={term}
 												placeholder={kind === 'show' ? t('library.import.phShow') : kind === 'music' ? t('library.import.phMusic') : t('library.import.phMovie')}
@@ -372,7 +376,7 @@
 														{#if m.title_id}
 															<span class="xs muted">{t('mediafiles.adopt.inLibrary')}</span>
 														{:else}
-															<Button variant="plain" onclick={() => use(f.folder, m)}>{t('library.byHand.useThis')}</Button>
+															<Button variant="plain" onclick={() => use(adoptKey(f), m)}>{t('library.byHand.useThis')}</Button>
 														{/if}
 													</li>
 												{/each}

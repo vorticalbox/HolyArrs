@@ -73,9 +73,10 @@ func (s *Service) handleAdopt(ctx context.Context, r *jobs.Run) error {
 	for _, x := range raw {
 		m, _ := x.(map[string]any)
 		f, _ := m["folder"].(string)
+		file, _ := m["file"].(string)
 		t, _ := m["tmdb_id"].(string)
 		id, _ := m["id"].(string)
-		cs = append(cs, AdoptChoice{Folder: f, TMDB: t, ID: id})
+		cs = append(cs, AdoptChoice{Folder: f, File: file, TMDB: t, ID: id})
 	}
 	res, err := s.Adopt(ctx, r.Job.Subject.ID, cs, JobActor(r))
 	adopted := 0
@@ -409,7 +410,11 @@ func (s *Service) recordFound(ctx context.Context, lf mediafiles.LibraryFolder, 
 			}
 			continue
 		}
-		for _, vid := range listVideos(lf.Path, v.FolderName) {
+		vids := listVideos(lf.Path, v.FolderName)
+		if len(filesAtLeast(vids, movieMinSize)) >= 2 {
+			continue
+		}
+		for _, vid := range vids {
 			if known[strings.ToLower(vid.Path)] {
 				continue
 			}
