@@ -21,6 +21,7 @@ app/backend/internal/discover/fresh.go
 app/backend/internal/discover/home.go
 app/backend/internal/discover/people.go
 app/backend/internal/discover/people_shelves.go
+app/backend/internal/discover/play.go
 app/backend/internal/discover/servicetop_routes.go
 app/backend/internal/discover/signinart.go
 app/backend/internal/discover/store_title_batch.go

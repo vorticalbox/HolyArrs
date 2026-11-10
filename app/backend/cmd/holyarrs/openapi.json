@@ -27702,6 +27702,55 @@
         "x-holyarrs-scope": "read"
       }
     },
+    "/api/v1/titles/{id}/file": {
+      "get": {
+        "description": "Streams the title's present main file when the browser can play it (.mp4, .m4v, .webm). Range requests seek. probe=1 returns {\"playable\": true or false} and does not send the file. Other containers answer 415.",
+        "parameters": [
+          {
+            "description": "The record id.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "1 returns whether the file can play, without the file body.",
+            "in": "query",
+            "name": "probe",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file, or {\"playable\": bool} when probe=1."
+          },
+          "206": {
+            "description": "A byte range of the file."
+          },
+          "401": {
+            "description": "Sign in first."
+          },
+          "404": {
+            "description": "No such title, or no present file."
+          },
+          "415": {
+            "description": "The file cannot play in the browser."
+          }
+        },
+        "summary": "Play a title's file",
+        "tags": [
+          "Library"
+        ],
+        "x-holyarrs-part": "title",
+        "x-holyarrs-permission": "signed_in",
+        "x-holyarrs-scope": "read"
+      }
+    },
     "/api/v1/titles/{id}/files/{fid}/choices": {
       "put": {
         "description": "Changes a File's protected choice or confirmed edition. Removing protection requires acknowledge_protection true.",

@@ -313,6 +313,7 @@
 			statusLabel={status.label}
 			description={title.overview || rich?.overview}
 			vtName={artName(title.id)}
+			libraryId={title.id}
 		>
 			{#snippet byline()}<AskedByLine {askers} />{/snippet}
 			{#snippet actions()}

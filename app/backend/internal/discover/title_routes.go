@@ -52,6 +52,7 @@ func (h *TitleHandlers) Routes(m *http.ServeMux) {
 	m.HandleFunc("POST /api/v1/titles", h.addTitle)
 	m.HandleFunc("GET /api/v1/titles/lookup", h.lookupTitles)
 	m.HandleFunc("GET /api/v1/titles/{id}", h.getTitle)
+	m.HandleFunc("GET /api/v1/titles/{id}/file", h.playFile)
 	m.HandleFunc("PUT /api/v1/titles/{id}", h.editTitle)
 	m.HandleFunc("POST /api/v1/titles/{id}/move", h.moveTitle)
 }

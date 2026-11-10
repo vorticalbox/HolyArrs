@@ -65,10 +65,11 @@
 	import { setTopCrumbs } from '../core/top-crumbs.svelte.ts';
 	import { viewTransitionName } from '../core/motion.ts';
 	import { proxied, sized } from '../core/tmdb-image.ts';
-	import { heroPictures } from '../core/trailer/trailer.ts';
+	import { claimPlayer, heroPictures } from '../core/trailer/trailer.ts';
 	import { autoplayHere, loadUISettings, trailerClickSources } from '../core/trailer/autoplay.svelte.ts';
 	import { openTheater } from '../core/trailer/theater.svelte.ts';
 	import { api } from '../core/api.ts';
+	import { to } from '../core/paths.ts';
 
 	let {
 		title,
@@ -97,7 +98,8 @@
 		actions: actionRow,
 		ratings = true,
 		showFacts = true,
-		tagline
+		tagline,
+		libraryId
 	}: {
 		title: string;
 		kind?: 'movie' | 'show';
@@ -126,6 +128,7 @@
 		ratings?: boolean;
 		showFacts?: boolean;
 		tagline?: string | null;
+		libraryId?: number;
 	} = $props();
 
 	let backdropFailed = $state(false);
@@ -139,6 +142,9 @@
 	let videos = $state<Video[] | undefined>();
 	let opening = $state(false);
 	let still = $state(true);
+	let playSrc = $state('');
+	let showFile = $state(false);
+	let stopFile: (() => void) | undefined;
 
 	// the title logo wins; fan art logo is the fallback when it fails to load
 	const shownLogo = $derived(logo && !logoFailed ? proxied(logo) : extras.logo && !fanartLogoFailed ? extras.logo : null);
@@ -189,8 +195,36 @@
 		return () => (live = false);
 	});
 
+	// A library movie gets Play only when its file can play in the browser. Pages that are not in the library keep the trailer button.
+	$effect(() => {
+		const id = libraryId;
+		playSrc = '';
+		if (!id) return;
+		let live = true;
+		void api.get<{ playable: boolean }>(`/titles/${id}/file?probe=1`).then((p) => {
+			if (live && p.playable) playSrc = to(`/api/v1/titles/${id}/file`);
+		}).catch(() => {});
+		return () => {
+			live = false;
+		};
+	});
+
 	// the still poster pill shows unless autoplay is already running here
 	onMount(() => void loadUISettings().then(() => (still = !autoplayHere())));
+
+	function playFile() {
+		stopFile?.();
+		stopFile = claimPlayer(() => {
+			showFile = false;
+		});
+		showFile = true;
+	}
+
+	function closeFile() {
+		showFile = false;
+		stopFile?.();
+		stopFile = undefined;
+	}
 
 	// A running hero trailer is expanded instead of opening a second player.
 	async function playTrailer(e: MouseEvent) {
@@ -285,7 +319,11 @@
 		{/snippet}
 		{#snippet actions()}
 			{@render actionRow?.()}
-			{#if kind && tmdb && videos?.length}
+			{#if libraryId}
+				{#if playSrc}
+					<ActionButton icon="play" label={t('ui.titleHero.play')} caption={t('ui.titleHero.play')} pill primary onclick={playFile} data-testid="hero-play" />
+				{/if}
+			{:else if kind && tmdb && videos?.length}
 				<ActionButton icon="play" label={t('ui.titleHero.playTheTrailer')} caption={t('ui.titleHero.trailer')} pill={still} onclick={playTrailer} busy={opening} data-testid="hero-trailer" data-off-while-playing />
 			{/if}
 		{/snippet}
@@ -293,6 +331,13 @@
 	{#if description}<p class="story" data-testid="title-story">{description}</p>{/if}
 	{#if byline}<div class="status-line">{@render byline()}</div>{/if}
 </div>
+
+{#if showFile && playSrc}
+	<div class="file-play" role="dialog" aria-label={t('ui.titleHero.play')}>
+		<button class="file-close" type="button" onclick={closeFile}>{t('ui.confirm.cancel')}</button>
+		<video src={playSrc} controls autoplay playsinline></video>
+	</div>
+{/if}
 
 {#snippet standArt()}
 	<img class="bd" class:blur={!!cover} class:square src={sized(stand!, 'poster')} alt="" decoding="async" fetchpriority="high" use:viewTransitionName={cover ? undefined : vtName} onerror={() => (posterFailed = true)} />
@@ -319,4 +364,7 @@
 	.story { max-width: 72ch; margin: var(--s-5) 0 0; font: 400 16px/1.55 var(--font-ui); color: var(--text); }
 	/* 44px keeps the member control a comfortable touch target */
 	.status-line { margin-top: var(--s-4); display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; font: 500 15px/1.4 var(--font-ui); color: var(--text-muted); }
+	.file-play { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 24px; background: rgb(0 0 0 / 88%); }
+	.file-play video { width: min(1100px, 100%); max-height: 86vh; background: #000; }
+	.file-close { position: absolute; top: 16px; right: 16px; height: 36px; padding: 0 14px; border: 0; border-radius: 999px; background: rgb(255 255 255 / 16%); color: #fff; font: 600 14px/1 var(--font-ui); cursor: pointer; }
 </style>

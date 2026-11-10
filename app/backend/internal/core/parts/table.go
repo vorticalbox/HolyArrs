@@ -448,6 +448,7 @@ var routeOwners = map[string]Owner{
 
 	// One title: its kind decides.
 	"GET /api/v1/titles/{id}":                   ByTitle,
+	"GET /api/v1/titles/{id}/file":              ByTitle,
 	"PUT /api/v1/titles/{id}":                   ByTitle,
 	"POST /api/v1/titles/{id}/move":             ByTitle,
 	"POST /api/v1/titles/{id}/versions":         ByTitle,

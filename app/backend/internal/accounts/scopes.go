@@ -92,6 +92,7 @@ var RoutePerms = map[string]webserver.Perm{
 	"GET /api/v1/search":                                   webserver.NeedSignedIn,
 	"GET /api/v1/home":                                     webserver.NeedSignedIn,
 	"GET /api/v1/titles/{id}":                              webserver.NeedSignedIn,
+	"GET /api/v1/titles/{id}/file":                         webserver.NeedSignedIn,
 	"GET /api/v1/titles/{id}/search-outcome":               webserver.NeedSignedIn,
 	"GET /api/v1/artwork/{name}":                           webserver.NeedSignedIn,
 	"GET /api/v1/artwork/tmdb/{size}/{file}":               webserver.NeedSignedIn,

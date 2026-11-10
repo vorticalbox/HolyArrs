@@ -368,6 +368,7 @@
 			status={d.neverAdd || d.ask ? heroPill(d).kind : undefined}
 			statusLabel={d.neverAdd || d.ask ? heroPill(d).label : undefined}
 			vtName={tmdbArtName(d.kind, d.tmdb)}
+			libraryId={d.kind === 'movie' && owned && ownState.kind === 'have' ? owned.id : undefined}
 		>
 			{#snippet byline()}{#if owned}<AskedByLine {askers} />{#if ownState.kind !== 'have' && ownState.kind !== 'downloading'}<SearchOutcomeLine titleId={owned.id} />{/if}{/if}{/snippet}
 			{#snippet actions()}
